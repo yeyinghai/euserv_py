@@ -290,24 +290,40 @@ class EUserv:
             # 处理验证码
             if 'captcha' in response.text.lower():
                 logger.info("⚠️ 需要验证码，正在识别...")
-                captcha_code = recognize_and_calculate(captcha_url, self.session)
+
+                max_captcha_retries = 5  # 验证码最多重试5次，防止重复登录触发风控
+                for captcha_attempt in range(max_captcha_retries):
+                    if captcha_attempt > 0:
+                        logger.warning(f"验证码识别失败，第 {captcha_attempt + 1}/{max_captcha_retries} 次重试...")
+                        time.sleep(2)  # 等待一下再重试
+
+                    # 识别验证码
+                    captcha_code = recognize_and_calculate(captcha_url, self.session)
                 
-                if not captcha_code:
-                    logger.error("❌ 验证码识别失败")
-                    return False
+                    if not captcha_code:
+                        logger.error("❌ 验证码识别失败")
+                        return False
+                    
+                    captcha_data = {
+                        'subaction': 'login',
+                        'sess_id': sess_id,
+                        'captcha_code': captcha_code
+                    }
                 
-                captcha_data = {
-                    'subaction': 'login',
-                    'sess_id': sess_id,
-                    'captcha_code': captcha_code
-                }
-                
-                response = self.session.post(url, headers=headers, data=captcha_data)
-                response.raise_for_status()
-                
-                if 'captcha' in response.text.lower():
-                    logger.error("❌ 验证码错误")
-                    return False
+                    response = self.session.post(url, headers=headers, data=captcha_data)
+                    response.raise_for_status()
+                    
+                    # 检查验证码是否正确
+                    if 'captcha' in response.text.lower():
+                        logger.warning(f"❌ 验证码错误（第 {captcha_attempt + 1} 次）")
+                        if captcha_attempt < max_captcha_retries - 1:
+                            continue  # 继续重试
+                        else:
+                            logger.error("❌ 验证码错误次数过多，重新进入登录流程")
+                            return False
+                    else:
+                        logger.info("✅ 验证码验证成功")
+                        break  # 验证码正确，跳出循环
             
 
             # 处理 PIN 验证

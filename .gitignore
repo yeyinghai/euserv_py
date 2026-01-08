@@ -1,2 +1,4 @@
 # 忽略所有 .env 文件
 *.env
+*Test.py
+*.png
