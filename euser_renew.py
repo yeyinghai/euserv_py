@@ -72,7 +72,7 @@ class GlobalConfig:
 GLOBAL_CONFIG = GlobalConfig(
     telegram_bot_token=os.getenv("TG_BOT_TOKEN"), # tg的api token
     telegram_chat_id=os.getenv("TG_CHAT_ID"), # tg的userid
-    bark_url=os.getenv("BARK_URL"),  #ios系统bark推送,基础格式：https://api.day.app/your_key/或自建服务器：https://your-bark-server.com/your_key/
+    bark_url=os.getenv("BARK_URL"),  #ios系统bark推送,基础格式：https://api.day.app/your_key/，或自建服务器：https://your-bark-server.com/your_key/
     max_workers=3,
     max_login_retries=5
 )
