@@ -7,9 +7,6 @@ EUserv 自动续期脚本 - 多账号多线程版本
 
 import os
 
-from dotenv import load_dotenv
-load_dotenv('dev.env')  # 本地配置
-
 import sys
 import io
 import re
