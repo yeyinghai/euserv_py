@@ -81,18 +81,20 @@ create_dockerfile() {
     cat > ${INSTALL_DIR}/Dockerfile <<'EOF'
 FROM python:3.9-slim
 
+# 设置工作目录（避免权限问题）
+RUN mkdir -p /app && chmod 777 /app
 WORKDIR /app
 
 # 安装依赖
 RUN pip install --no-cache-dir requests beautifulsoup4 lxml
 
-# 复制脚本
-COPY euser_renew.py /app/
-COPY config.env /app/
-
 # 设置时区
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 复制脚本
+COPY euser_renew.py /app/
+COPY config.env /app/
 
 CMD ["python", "/app/euser_renew.py"]
 EOF
@@ -105,11 +107,11 @@ create_docker_compose() {
     
     print_info "创建docker-compose配置..."
     cat > ${COMPOSE_FILE} <<EOF
-version: '3.8'
-
 services:
   euserv-renew:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: euserv-renew
     restart: unless-stopped
     env_file:
@@ -121,6 +123,8 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - RUN_HOUR=${run_hour}
+    security_opt:
+      - no-new-privileges:true
     labels:
       - "euserv.schedule=${run_hour}"
 EOF
@@ -255,10 +259,11 @@ show_menu() {
     echo "5. 修改执行时间"
     echo "6. 修改账号配置"
     echo "7. 更新续期脚本"
-    echo "8. 卸载服务"
+    echo "8. 修复Docker权限问题"
+    echo "9. 卸载服务"
     echo "0. 退出"
     echo "======================================"
-    read -p "请选择操作 [0-8]: " choice
+    read -p "请选择操作 [0-9]: " choice
     
     case $choice in
         1) show_status ;;
@@ -268,7 +273,8 @@ show_menu() {
         5) change_schedule ;;
         6) change_config ;;
         7) update_script ;;
-        8) uninstall ;;
+        8) fix_docker_permission ;;
+        9) uninstall ;;
         0) exit 0 ;;
         *) echo "无效选择"; sleep 2; show_menu ;;
     esac
@@ -431,6 +437,118 @@ update_script() {
     else
         echo "取消更新"
     fi
+    
+    echo ""
+    read -p "按回车键返回菜单..." 
+    show_menu
+}
+
+fix_docker_permission() {
+    echo ""
+    echo "===== 修复Docker权限问题 ====="
+    echo ""
+    echo "正在诊断问题..."
+    echo ""
+    
+    # 检查Docker版本
+    echo "Docker版本:"
+    docker --version
+    echo ""
+    
+    # 检查存储驱动
+    echo "当前存储驱动:"
+    docker info | grep "Storage Driver" || echo "无法获取存储驱动信息"
+    echo ""
+    
+    echo "可用的修复方案:"
+    echo "1. 切换Docker存储驱动为vfs (推荐)"
+    echo "2. 使用直接运行Python脚本的方式(无Docker)"
+    echo "3. 返回菜单"
+    echo ""
+    read -p "请选择修复方案 [1-3]: " fix_choice
+    
+    case $fix_choice in
+        1)
+            echo ""
+            echo "正在切换Docker存储驱动为vfs..."
+            echo ""
+            
+            # 停止Docker
+            systemctl stop docker
+            
+            # 备份Docker配置
+            if [ -f /etc/docker/daemon.json ]; then
+                cp /etc/docker/daemon.json /etc/docker/daemon.json.bak.$(date +%Y%m%d_%H%M%S)
+            fi
+            
+            # 创建或更新daemon.json
+            mkdir -p /etc/docker
+            cat > /etc/docker/daemon.json <<'DOCKEREOF'
+{
+  "storage-driver": "vfs"
+}
+DOCKEREOF
+            
+            # 清理旧数据
+            rm -rf /var/lib/docker/*
+            
+            # 重启Docker
+            systemctl start docker
+            
+            echo "✓ Docker存储驱动已切换为vfs"
+            echo ""
+            echo "正在重建容器..."
+            cd ${INSTALL_DIR}
+            docker-compose down 2>/dev/null
+            docker-compose up --build -d
+            echo ""
+            echo "✓ 修复完成! 请尝试再次执行续期任务"
+            ;;
+        2)
+            echo ""
+            echo "正在配置直接运行模式..."
+            echo ""
+            
+            # 安装Python依赖
+            apt-get update
+            apt-get install -y python3 python3-pip
+            pip3 install requests beautifulsoup4 lxml
+            
+            # 修改systemd服务为直接运行
+            cat > /etc/systemd/system/euserv-renew.service <<'SVCEOF'
+[Unit]
+Description=EUserv Auto Renew Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/euserv_renew
+EnvironmentFile=/opt/euserv_renew/config.env
+ExecStart=/usr/bin/python3 /opt/euserv_renew/euser_renew.py
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+            
+            systemctl daemon-reload
+            systemctl enable euserv-renew.service
+            
+            echo "✓ 已切换为直接运行模式(不使用Docker)"
+            echo "✓ 服务已重新配置"
+            ;;
+        3)
+            show_menu
+            return
+            ;;
+        *)
+            echo "无效选择"
+            sleep 2
+            fix_docker_permission
+            return
+            ;;
+    esac
     
     echo ""
     read -p "按回车键返回菜单..." 
