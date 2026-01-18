@@ -301,18 +301,135 @@ show_logs() {
 
 run_now() {
     echo ""
-    echo "===== 立即执行续期任务 ====="
-    cd ${INSTALL_DIR}
-    docker-compose up --build
+    
+    # 检查运行模式
+    if [ -f "${INSTALL_DIR}/.no_docker" ]; then
+        # 直接运行模式
+        echo "===== 立即执行续期任务 (直接运行模式) ====="
+        systemctl start euserv-renew.service
+        sleep 2
+        echo ""
+        echo "===== 执行日志 ====="
+        journalctl -u euserv-renew.service -n 50 --no-pager
+    else
+        # Docker模式
+        echo "===== 立即执行续期任务 (Docker模式) ====="
+        echo ""
+        echo "⚠️  检测到正在使用Docker模式"
+        echo ""
+        
+        # 先尝试运行
+        cd ${INSTALL_DIR}
+        if ! docker-compose up --build 2>&1 | tee /tmp/docker_run.log | grep -q "disk quota exceeded\|operation not permitted"; then
+            # 成功运行
+            read -p "按回车键返回菜单..." 
+            show_menu
+            return
+        fi
+        
+        # 检测到错误
+        echo ""
+        echo "❌ Docker运行失败！"
+        echo ""
+        echo "错误原因: VPS磁盘配额/inode不足，不支持Docker"
+        echo ""
+        echo "解决方案:"
+        echo "1. 立即切换到直接运行模式 (推荐)"
+        echo "2. 返回菜单手动修复"
+        echo ""
+        read -p "请选择 [1-2]: " auto_fix
+        
+        if [[ $auto_fix == "1" ]]; then
+            echo ""
+            echo "正在自动切换到直接运行模式..."
+            auto_switch_to_direct_mode
+        fi
+    fi
+    
     read -p "按回车键返回菜单..." 
     show_menu
+}
+
+auto_switch_to_direct_mode() {
+    echo ""
+    echo "===== 自动切换到直接运行模式 ====="
+    echo ""
+    
+    # 停止并清理Docker容器
+    cd ${INSTALL_DIR}
+    docker-compose down -v 2>/dev/null
+    echo "✓ 已停止Docker容器"
+    
+    # 检查Python
+    if ! command -v python3 &> /dev/null; then
+        echo "安装Python3..."
+        apt-get update -qq
+        apt-get install -y python3 python3-pip -qq
+    fi
+    
+    # 安装Python依赖
+    echo "安装Python依赖库..."
+    pip3 install --quiet requests beautifulsoup4 lxml 2>/dev/null || \
+    pip3 install requests beautifulsoup4 lxml
+    
+    echo "✓ Python依赖安装完成"
+    
+    # 修改systemd服务为直接运行
+    echo "配置系统服务..."
+    cat > /etc/systemd/system/euserv-renew.service <<'SVCEOF'
+[Unit]
+Description=EUserv Auto Renew Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/euserv_renew
+EnvironmentFile=/opt/euserv_renew/config.env
+ExecStart=/usr/bin/python3 /opt/euserv_renew/euser_renew.py
+StandardOutput=journal
+StandardError=journal
+User=root
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+    
+    systemctl daemon-reload
+    systemctl enable euserv-renew.service
+    
+    # 标记为直接运行模式
+    touch ${INSTALL_DIR}/.no_docker
+    
+    echo "✓ 已切换为直接运行模式"
+    echo ""
+    
+    # 立即测试运行
+    echo "===== 测试运行 ====="
+    systemctl start euserv-renew.service
+    sleep 2
+    echo ""
+    journalctl -u euserv-renew.service -n 30 --no-pager
+    echo ""
+    echo "✓ 切换完成！"
 }
 
 restart_service() {
     echo ""
     echo "===== 重启服务 ====="
-    systemctl restart euserv-renew.timer
-    echo "服务已重启"
+    
+    # 检查是否使用Docker模式
+    if [ -f "${INSTALL_DIR}/docker-compose.yml" ] && docker ps &> /dev/null; then
+        # Docker模式
+        cd ${INSTALL_DIR}
+        docker-compose down
+        docker-compose up -d --build
+        echo "✓ Docker服务已重启"
+    else
+        # 直接运行模式
+        systemctl restart euserv-renew.timer
+        echo "✓ 定时服务已重启"
+    fi
+    
     sleep 2
     show_menu
 }
@@ -452,17 +569,42 @@ fix_docker_permission() {
     
     # 检查Docker版本
     echo "Docker版本:"
-    docker --version
+    docker --version 2>/dev/null || echo "未安装"
     echo ""
     
     # 检查存储驱动
     echo "当前存储驱动:"
-    docker info | grep "Storage Driver" || echo "无法获取存储驱动信息"
+    docker info 2>/dev/null | grep "Storage Driver" || echo "无法获取存储驱动信息"
     echo ""
     
+    # 检查磁盘空间
+    echo "磁盘使用情况:"
+    df -h / | tail -1
+    echo ""
+    
+    # 检查当前模式
+    if [ -f "${INSTALL_DIR}/.no_docker" ]; then
+        echo "📌 当前模式: 直接运行模式 (已禁用Docker)"
+        echo ""
+        echo "如需切换回Docker模式:"
+        echo "1. 删除标记文件: rm ${INSTALL_DIR}/.no_docker"
+        echo "2. 确保Docker可用"
+        echo "3. 重启服务"
+        echo ""
+        read -p "按回车键返回菜单..." 
+        show_menu
+        return
+    fi
+    
+    echo "📌 当前模式: Docker模式"
+    echo ""
+    echo "检测到的问题类型:"
+    echo "- overlay/权限错误 → 方案1可能有效"
+    echo "- 磁盘配额/inode不足 → 必须使用方案2"
+    echo ""
     echo "可用的修复方案:"
-    echo "1. 切换Docker存储驱动为vfs (推荐)"
-    echo "2. 使用直接运行Python脚本的方式(无Docker)"
+    echo "1. 切换Docker存储驱动为vfs (需要足够空间)"
+    echo "2. 切换到直接运行模式 (推荐,节省空间)"
     echo "3. 返回菜单"
     echo ""
     read -p "请选择修复方案 [1-3]: " fix_choice
@@ -490,6 +632,7 @@ fix_docker_permission() {
 DOCKEREOF
             
             # 清理旧数据
+            echo "清理Docker旧数据..."
             rm -rf /var/lib/docker/*
             
             # 重启Docker
@@ -500,43 +643,23 @@ DOCKEREOF
             echo "正在重建容器..."
             cd ${INSTALL_DIR}
             docker-compose down 2>/dev/null
-            docker-compose up --build -d
-            echo ""
-            echo "✓ 修复完成! 请尝试再次执行续期任务"
+            
+            echo "尝试构建容器..."
+            if docker-compose up --build -d 2>&1 | grep -q "disk quota exceeded\|operation not permitted"; then
+                echo ""
+                echo "❌ 方案1失败: VPS资源限制太严格"
+                echo "建议使用方案2 (直接运行模式)"
+                echo ""
+                read -p "是否立即切换到方案2? (Y/n): " switch_to_2
+                if [[ $switch_to_2 != "n" && $switch_to_2 != "N" ]]; then
+                    auto_switch_to_direct_mode
+                fi
+            else
+                echo "✓ 修复完成!"
+            fi
             ;;
         2)
-            echo ""
-            echo "正在配置直接运行模式..."
-            echo ""
-            
-            # 安装Python依赖
-            apt-get update
-            apt-get install -y python3 python3-pip
-            pip3 install requests beautifulsoup4 lxml
-            
-            # 修改systemd服务为直接运行
-            cat > /etc/systemd/system/euserv-renew.service <<'SVCEOF'
-[Unit]
-Description=EUserv Auto Renew Service
-After=network.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/euserv_renew
-EnvironmentFile=/opt/euserv_renew/config.env
-ExecStart=/usr/bin/python3 /opt/euserv_renew/euser_renew.py
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-            
-            systemctl daemon-reload
-            systemctl enable euserv-renew.service
-            
-            echo "✓ 已切换为直接运行模式(不使用Docker)"
-            echo "✓ 服务已重新配置"
+            auto_switch_to_direct_mode
             ;;
         3)
             show_menu
