@@ -845,6 +845,7 @@ uninstall() {
         # 删除服务文件
         rm -f /etc/systemd/system/euserv-renew.service
         rm -f /etc/systemd/system/euserv-renew.timer
+        rm -f /etc/systemd/system/euserv-renew.*
         systemctl daemon-reload
         
         # 删除安装目录
