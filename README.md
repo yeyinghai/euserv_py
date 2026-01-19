@@ -1,6 +1,7 @@
 # euserv德鸡自动续期
 
 euserv免费机需要每个月续期，本项目实现自动续期，支持github的action或者vps执行
+* [在 VPS 虚拟主机部署](./README_VPS.md)
 
 ## 1.主要功能
    

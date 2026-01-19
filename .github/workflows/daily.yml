@@ -31,3 +31,13 @@ jobs:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           BARK_URL: ${{ secrets.BARK_URL }}
         run: python euser_renew.py
+
+# --- action保活 ---
+      - name: Keep Alive Action
+        run: |
+          date > last_run.txt
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_run.txt
+          git commit -m "Keep alive: $(date)" || echo "No changes to commit"
+          git push
