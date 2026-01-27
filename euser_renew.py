@@ -38,7 +38,7 @@ if not hasattr(Image, 'ANTIALIAS'):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 # 全局 OCR 实例（线程安全）
-ocr = ddddocr.DdddOcr()
+ocr = ddddocr.DdddOcr(beta=True)
 ocr_lock = threading.Lock()
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.61 Safari/537.36"
@@ -111,10 +111,10 @@ def recognize_and_calculate(captcha_image_url: str, session: requests.Session) -
     
     # 运算符映射表（用于中间位置）
     OPERATOR_CORRECTIONS = {
-        'T': '+', 't': '+',  # T → 加号
+        'T': '+', 't': '+', 'F': '+', 'f': '+', # T → 加号
         'I': '-', 'i': '-', '|': '-', '1': '-', 'l': '-',  # 竖线类 → 减号
         'x': '×', 'X': '×',  # x/X → 乘号
-        '*': '×', '×': '×',  # 统一乘号
+        '*': '×', 'r': '×', '×': '×',  # 统一乘号
         '÷': '/', ':': '/',  # 统一除号
         '+': '+', '-': '-', '/': '/',  # 保留原有运算符
     }
@@ -168,7 +168,7 @@ def recognize_and_calculate(captcha_image_url: str, session: requests.Session) -
         
         # OCR 识别（加锁保证线程安全）
         with ocr_lock:
-            text = ocr.classification(processed_bytes).strip()
+            text = ocr.classification(processed_bytes, png_fix=True).strip()
         
         logger.debug(f"OCR 原始识别: {text}")
 
@@ -699,10 +699,14 @@ class EUserv:
             }
             resp2 = self.session.post(url, headers=headers, data=data)
             resp2.raise_for_status()
+            # 检查PIN发送响应
+            if resp2.status_code != 200:
+                logger.error("❌ PIN发送请求失败")
+                return False
             
             # 步骤3: 获取 PIN
             logger.debug("步骤3: 等待并获取 PIN 码...")
-            time.sleep(3)
+            time.sleep(5)
             pin = get_euserv_pin(
                 self.config.email,
                 self.config.email_password,
@@ -736,7 +740,20 @@ class EUserv:
             
             token = result['token']['value']
             logger.debug(f"✅ 获取到 token: {token[:20]}...")
-            time.sleep(3)
+            time.sleep(2)
+
+            # logger.debug("步骤4.5: 确认续期图...")
+            # data = {
+            #     'sess_id': self.sess_id,
+            #     'ord_id': order_id,
+            #     'subaction': 'kc2_customer_contract_details_extend_contract_term_confirm',
+            #     'auth': token
+            # }
+            # resp4 = self.session.post(url, headers=headers, data=data)
+            # resp4.raise_for_status()
+
+
+
 
             # 步骤5: 提交续期请求
             logger.debug("步骤5: 提交续期请求...")
@@ -747,8 +764,8 @@ class EUserv:
                 'auth': token
             }
       
-            resp4 = self.session.post(url, headers=headers, data=data)
-            resp4.raise_for_status()
+            resp5 = self.session.post(url, headers=headers, data=data)
+            resp5.raise_for_status()
             time.sleep(3)
             
             logger.info(f"✅ 服务器 {order_id} 续期成功")
